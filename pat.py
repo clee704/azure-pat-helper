@@ -151,7 +151,7 @@ class RevokeCommand:
             name = pat['displayName']
             if args.prefix is None or name.startswith(args.prefix):
                 if (args.dry_run or args.yes or
-                    input(f'Revoke PAT "{name}"? ') in ('y', 'yes')):
+                        input(f'Revoke PAT "{name}"? ') in ('y', 'yes')):
                     if args.dry_run:
                         print(f'Revoked PAT "{name}" (dry run)')
                     else:
