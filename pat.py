@@ -22,6 +22,7 @@
 #
 from datetime import datetime, timedelta
 import argparse
+import base64
 import getpass
 import json
 import os.path
@@ -414,6 +415,80 @@ class MavenCommand(RotationCommandBase):
             help='path to settings.xml')
 
 
+class NpmCommand(RotationCommandBase):
+    command_name = 'npm'
+    command_help = 'rotate PAT tokens in the user npmrc'
+    pat_prefix = '[NPM]'
+
+    username_pattern = (r'//(pkgs\.dev\.azure\.com/(?P<org1>[\w-]+)|'
+                        r'(?P<org2>[\w-]+)\.pkgs\.visualstudio\.com)/'
+                        r'(?P<project>[\w-]+)/_packaging/(?P<feed>[\w-]+)/'
+                        r'npm(/registry)?/:username=((?P=org1)|(?P=org2))')
+    password_pattern = (r'(?P<key>//(pkgs\.dev\.azure\.com/(?P<org1>[\w-]+)|'
+                        r'(?P<org2>[\w-]+)\.pkgs\.visualstudio\.com)/'
+                        r'(?P<project>[\w-]+)/_packaging/(?P<feed>[\w-]+)/'
+                        r'npm(/registry)?/:_password)='
+                        '(?P<token>[A-Za-z0-9+/=]+)')
+
+    def get_organizations(self, args):
+        auth_lines = []
+        collect_auth_lines = False
+        with open(args.npmrc_path) as f:
+            for line in f:
+                if line.strip() == '; begin auth token':
+                    collect_auth_lines = True
+                elif collect_auth_lines:
+                    if line.strip() == '; end auth token':
+                        collect_auth_lines = False
+                    else:
+                        auth_lines.append(line)
+        orgs = set()
+        for auth_line in auth_lines:
+            org = self.extract_org(auth_line)
+            if org:
+                orgs.add(org)
+        return list(orgs)
+
+    def extract_org(self, auth_line):
+        match = re.match(self.username_pattern, auth_line)
+        if match:
+            return match.group('org1') or match.group('org2')
+
+    def update_tokens(self, tokens, args):
+        lines = []
+        update_auth_lines = False
+        with open(args.npmrc_path) as f:
+            for line in f:
+                if line.strip() == '; begin auth token':
+                    update_auth_lines = True
+                elif update_auth_lines:
+                    if line.strip() == '; end auth token':
+                        update_auth_lines = False
+                    else:
+                        line = self.update_token(line, tokens)
+                lines.append(line)
+        with open(args.npmrc_path, 'w') as f:
+            f.writelines(lines)
+
+    def update_token(self, line, tokens):
+        match = re.match(self.password_pattern, line)
+        if match:
+            org = match.group('org1') or match.group('org2')
+            if org in tokens:
+                token = tokens[org]
+                token_b64 = base64.b64encode(token.encode()).decode()
+                return re.sub(self.password_pattern, rf'\g<key>={token_b64}',
+                              line)
+        return line
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--npmrc-path',
+            metavar='PATH',
+            default=os.path.expanduser('~/.npmrc'),
+            help='path to .npmrc')
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Azure DevOps PAT helper. Azure CLI is required to run '
@@ -425,6 +500,7 @@ def main():
         CreateCommand(),
         GitCommand(),
         MavenCommand(),
+        NpmCommand(),
     ]
     subparsers = parser.add_subparsers(title='subcommands', required=True)
     for command in commands:

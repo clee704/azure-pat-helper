@@ -1,4 +1,4 @@
-usage: pat.py [-h] {list,revoke,create,git,maven} ...
+usage: pat.py [-h] {list,revoke,create,git,maven,npm} ...
 
 Azure DevOps PAT helper. Azure CLI is required to run this script. Before
 using this script, you must log in to Azure using `az login`.
@@ -7,9 +7,10 @@ options:
   -h, --help            show this help message and exit
 
 subcommands:
-  {list,revoke,create,git,maven}
+  {list,revoke,create,git,maven,npm}
     list                list PATs
     revoke              revoke PATs
     create              create PAT
     git                 Git credential helper
     maven               rotate PAT tokens in Maven settings.xml
+    npm                 rotate PAT tokens in the user npmrc
