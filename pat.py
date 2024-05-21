@@ -123,7 +123,15 @@ def get_organizations():
                    response_filter='value[].accountName')
 
 
-class ListCommand:
+class CommandRegistry:
+    commands = []
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        CommandRegistry.commands.append(cls)
+
+
+class ListCommand(CommandRegistry):
     def run(self, args):
         pats = list_pats(args.organization)
         print(json.dumps(pats, indent=2))
@@ -143,7 +151,7 @@ class ListCommand:
             required=True)
 
 
-class RevokeCommand:
+class RevokeCommand(CommandRegistry):
     def run(self, args):
         pats = list_pats(args.organization)
         print(f'Found {len(pats)} PAT(s)')
@@ -188,7 +196,7 @@ class RevokeCommand:
             'them')
 
 
-class CreateCommand:
+class CreateCommand(CommandRegistry):
     def run(self, args):
         name = format_pat_name(args.name, org=args.organization)
         expiration = datetime.now() + timedelta(days=args.expiration_days)
@@ -229,7 +237,7 @@ class CreateCommand:
             'from now')
 
 
-class GitCommand:
+class GitCommand(CommandRegistry):
     def run(self, args):
         input_lines = sys.stdin.readlines()
         if not args.use_bearer_token:
@@ -376,7 +384,7 @@ class RotationCommandBase:
             default=self.pat_prefix)
 
 
-class MavenCommand(RotationCommandBase):
+class MavenCommand(RotationCommandBase, CommandRegistry):
     command_name = 'maven'
     command_help = 'rotate PAT tokens in Maven settings.xml'
     pat_prefix = '[Maven]'
@@ -415,7 +423,7 @@ class MavenCommand(RotationCommandBase):
             help='path to settings.xml')
 
 
-class NpmCommand(RotationCommandBase):
+class NpmCommand(RotationCommandBase, CommandRegistry):
     command_name = 'npm'
     command_help = 'rotate PAT tokens in the user npmrc'
     pat_prefix = '[NPM]'
@@ -494,14 +502,7 @@ def main():
         description='Azure DevOps PAT helper. Azure CLI is required to run '
         'this script. Before using this script, you must log in to Azure '
         'using `az login`.')
-    commands = [
-        ListCommand(),
-        RevokeCommand(),
-        CreateCommand(),
-        GitCommand(),
-        MavenCommand(),
-        NpmCommand(),
-    ]
+    commands = [cls() for cls in CommandRegistry.commands]
     subparsers = parser.add_subparsers(title='subcommands', required=True)
     for command in commands:
         command.register(subparsers, parser)
