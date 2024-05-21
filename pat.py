@@ -1,0 +1,445 @@
+#!/bin/env python3
+#
+# Copyright 2024 Chungmin Lee
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the “Software”), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+from datetime import datetime, timedelta
+import argparse
+import getpass
+import json
+import os.path
+import platform
+import re
+import subprocess
+import sys
+import traceback
+import urllib.parse
+import xml.etree.ElementTree
+
+api_version = '7.1-preview.1'
+
+
+def run_json_command(cmd_args):
+    p = subprocess.run(cmd_args, capture_output=True)
+    if p.returncode != 0:
+        cmd = ' '.join(cmd_args)
+        raise RuntimeError(
+            f'Command {cmd!r} returned a non-zero code {p.returncode}\n' +
+            f'stdout: {p.stdout.decode(sys.stdout.encoding)}\n' +
+            f'stderr: {p.stderr.decode(sys.stdout.encoding)}')
+    return {} if p.stdout == b'' else json.loads(p.stdout)
+
+
+def az_rest(uri, method, query_params=None, body=None, content_type=None,
+            response_filter=None):
+    params = {'api-version': api_version}
+    if query_params is not None:
+        params.update(query_params)
+    query_string = urllib.parse.urlencode(params)
+    uri = f'{uri}?{query_string}'
+    cmd_args = [
+        'az', 'rest',
+        '--method', method,
+        '--uri', uri,
+        '--resource', 'https://management.core.windows.net/',
+        '--output', 'json']
+    if body is not None:
+        cmd_args.extend(['--body', body])
+    if content_type is not None:
+        cmd_args.extend(['--headers', f'Content-Type={content_type}'])
+    if response_filter is not None:
+        cmd_args.extend(['--query', response_filter])
+    return run_json_command(cmd_args)
+
+
+# Reference: https://learn.microsoft.com/en-us/rest/api/azure/devops/tokens/pats?view=azure-devops-rest-7.1
+def pats_rest(org, method, *args, **kwargs):
+    uri = f'https://vssps.dev.azure.com/{org}/_apis/Tokens/Pats'
+    return az_rest(uri, method, *args, **kwargs)
+
+
+def create_pat(org, name, scope, expiration):
+    pat = pats_rest(org, 'post', body=f'{{"displayName": "{name}", "scope": '
+                    f'"{scope}", "validTo": "{expiration.isoformat()}"}}',
+                    content_type='application/json')
+    if pat['patTokenError'] != 'none':
+        raise RuntimeError(f'PAT creation failed: {pat["patTokenError"]}')
+    return pat['patToken']
+
+
+def list_pats(org):
+    return pats_rest(org, 'get', response_filter='patTokens',
+                     query_params={'organization': org})
+
+
+def revoke_pat(org, pat):
+    pats_rest(org, 'delete', query_params={
+        'authorizationId': pat['authorizationId']})
+
+
+def format_pat_name(format_string=None, **kwargs):
+    if format_string is None:
+        format_string = ('{prefix} org={org} host={host} user={user} '
+                         'timestamp={timestamp}')
+    host = platform.node()
+    user = getpass.getuser()
+    timestamp = datetime.now()
+    return format_string.format(host=host, user=user, timestamp=timestamp,
+                                **kwargs)
+
+
+def get_access_token():
+    cmd_args = ['az', 'account', 'get-access-token']
+    return run_json_command(cmd_args)
+
+
+def get_member_id():
+    uri = 'https://app.vssps.visualstudio.com/_apis/profile/profiles/me'
+    return az_rest(uri, 'get', response_filter='id')
+
+
+def get_organizations():
+    uri = 'https://app.vssps.visualstudio.com/_apis/accounts'
+    member_id = get_member_id()
+    return az_rest(uri, 'get', query_params={'memberId': member_id},
+                   response_filter='value[].accountName')
+
+
+class ListCommand:
+    def run(self, args):
+        pats = list_pats(args.organization)
+        print(json.dumps(pats, indent=2))
+
+    def register(self, subparsers, parser):
+        parser = subparsers.add_parser(
+            'list',
+            help='list PATs',
+            description='List PATs from the given Azure DevOps organization.'
+            ' Due to a bug in Azure DevOps REST API, it might return PATs from'
+            ' other organizations as well.')
+        parser.set_defaults(func=self.run)
+        parser.add_argument(
+            '-o', '--organization',
+            metavar='ORG',
+            help='Azure DevOps organization',
+            required=True)
+
+
+class RevokeCommand:
+    def run(self, args):
+        pats = list_pats(args.organization)
+        print(f'Found {len(pats)} PAT(s)')
+        num_revoked = 0
+        for pat in pats:
+            name = pat['displayName']
+            if args.prefix is None or name.startswith(args.prefix):
+                if (args.dry_run or args.yes or
+                    input(f'Revoke PAT "{name}"? ') in ('y', 'yes')):
+                    if args.dry_run:
+                        print(f'Revoked PAT "{name}" (dry run)')
+                    else:
+                        revoke_pat(args.organization, pat)
+                        print(f'Revoked PAT "{name}"')
+                    num_revoked += 1
+        print(f'Revoked {num_revoked} PAT(s)')
+
+    def register(self, subparsers, parser):
+        parser = subparsers.add_parser(
+            'revoke',
+            help='revoke PATs',
+            description='Revoke PATs from the given Azure DevOps organization.'
+            ' Due to a bug in Azure DevOps REST API, it might revoke PATs from'
+            ' other organizations as well.')
+        parser.set_defaults(func=self.run)
+        parser.add_argument(
+            '-o', '--organization',
+            metavar='ORG',
+            help='Azure DevOps organization',
+            required=True)
+        parser.add_argument(
+            '--prefix',
+            help='revoke PATs whose name starts with this prefix')
+        parser.add_argument(
+            '-y', '--yes',
+            action='store_true',
+            help='assume "yes" as answer to all prompts')
+        parser.add_argument(
+            '--dry-run',
+            action='store_true',
+            help='print PATs that would be revoked, but not actually revoke '
+            'them')
+
+
+class CreateCommand:
+    def run(self, args):
+        name = format_pat_name(args.name, org=args.organization)
+        expiration = datetime.now() + timedelta(days=args.expiration_days)
+        pat = create_pat(args.organization, name, args.scope, expiration)
+        print(json.dumps(pat, indent=2))
+
+    def register(self, subparsers, parser):
+        parser = subparsers.add_parser(
+            'create',
+            help='create PAT',
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            description='Create a PAT in the given Azure DevOps organization.')
+        parser.set_defaults(func=self.run)
+        parser.add_argument(
+            '-o', '--organization',
+            metavar='ORG',
+            help='Azure DevOps organization',
+            required=True)
+        parser.add_argument(
+            '--name',
+            metavar='NAME',
+            help='PAT name format',
+            default='[PAT] org={org} host={host} user={user} '
+            'timestamp={timestamp}')
+        parser.add_argument(
+            '--scope',
+            metavar='SCOPE',
+            help='PAT scope (see https://learn.microsoft.com/en-us/azure/'
+            'devops/integrate/get-started/authentication/oauth?view=azure-'
+            'devops#scopes for more information)',
+            default='vso.code')
+        parser.add_argument(
+            '-e', '--expiration-days',
+            metavar='N',
+            type=int,
+            default=7,
+            help='PAT expiration timestamp expressed in the number of days '
+            'from now')
+
+
+class GitCommand:
+    def run(self, args):
+        input_lines = sys.stdin.readlines()
+        if not args.use_bearer_token:
+            if self.delegate(args, input_lines):
+                return
+        if args.action == 'get':
+            org = self.get_org(input_lines)
+            if org:
+                token = self.get_token(args, org)
+                for line in input_lines:
+                    sys.stdout.write(line)
+                print(f'username={org}')
+                print(f'password={token}')
+
+    def delegate(self, args, input_lines):
+        cmd = args.delegate
+        if cmd == 'git credential-cache':
+            cmd += f' --timeout {args.expiration_days * 86400}'
+        cmd += f' {args.action}'
+        input_str = ''.join(input_lines).encode(sys.stdin.encoding)
+        p = subprocess.run(cmd, shell=True, capture_output=True,
+                           input=input_str)
+        if p.stdout:
+            sys.stdout.write(p.stdout.decode(sys.stdout.encoding))
+            return True
+
+    def get_org(self, input_lines):
+        host = self.get_value(input_lines, 'host')
+        match = re.match(r'^(?P<org>[\w-]+)\.visualstudio\.com$', host)
+        if match:
+            return match.group('org')
+        if host == 'dev.azure.com':
+            return self.get_value(input_lines, 'username')
+
+    def get_value(self, input_lines, key):
+        lines = [line for line in input_lines if line.startswith(f'{key}=')]
+        if len(lines) != 1:
+            raise RuntimeError(f'Expected exactly one {key}, but got '
+                               f'{len(host_lines)}')
+        return lines[0].removeprefix(f'{key}=').removesuffix('\n')
+
+    def get_token(self, args, org):
+        if args.use_bearer_token:
+            bear = get_access_token()
+            return bear['accessToken']
+        else:
+            name = format_pat_name(prefix=args.prefix, org=org)
+            expiration = datetime.now() + timedelta(days=args.expiration_days)
+            pat = create_pat(org, name, 'vso.code_write', expiration)
+            return pat['token']
+
+    def register(self, subparsers, parser):
+        parser = subparsers.add_parser(
+            'git',
+            help='Git credential helper',
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            description='Git credential helper implementation. Set '
+            f'credential.helper to "/path/to/{parser.prog} git" to use this '
+            'as your credential helper.')
+        parser.set_defaults(func=self.run)
+        parser.add_argument(
+            '--delegate',
+            metavar='COMMAND',
+            help='delegate helper to store credentials',
+            default='git credential-cache')
+        parser.add_argument(
+            '-e', '--expiration-days',
+            metavar='N',
+            type=int,
+            default=7,
+            help='PAT expiration timestamp expressed in the number of days '
+            'from now')
+        parser.add_argument(
+            '--prefix',
+            help='PAT name prefix',
+            default='[Git]')
+        parser.add_argument(
+            '--use-bearer-token',
+            action='store_true',
+            help='use bearer token instead of creating a PAT; a generated '
+            'bearer token is not reused')
+        parser.add_argument(
+            'action', choices=['get', 'store', 'erase'])
+
+
+class RotationCommandBase:
+    def run(self, args):
+        orgs = (args.organizations.split(',') if args.organizations else
+                self.get_organizations(args))
+        if not orgs:
+            print('No organizations are specified/found')
+            return 1
+        if args.revoke:
+            self.revoke_pats(orgs, args.prefix)
+        expiration = datetime.now() + timedelta(days=args.expiration_days)
+        self.rotate_pats(orgs, args.prefix, expiration, args)
+
+    def revoke_pats(self, orgs, prefix):
+        for pat in list_pats(orgs[0]):
+            regex = re.compile(rf'^{re.escape(prefix)} org=(?P<org>[\w-]+)')
+            match = re.match(regex, pat['displayName'])
+            if match:
+                org = match.group('org')
+                if org in orgs:
+                    revoke_pat(org, pat)
+                    print(f'Revoked PAT {pat["displayName"]!r}')
+
+    def rotate_pats(self, orgs, prefix, expiration, args):
+        tokens = {}
+        for org in orgs:
+            name = format_pat_name(prefix=prefix, org=org)
+            pat = create_pat(org, name, 'vso.packaging_write', expiration)
+            tokens[org] = pat['token']
+            print(f'Created PAT {pat["displayName"]!r} valid to '
+                  f'{pat["validTo"]}')
+        self.update_tokens(tokens, args)
+
+    def register(self, subparsers, parser):
+        parser = subparsers.add_parser(
+            self.command_name,
+            help=self.command_help,
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+        parser.set_defaults(func=self.run)
+        self.add_arguments(parser)
+        parser.add_argument(
+            '-o', '--organizations',
+            metavar='ORGS',
+            help='Azure DevOps organizations separated by commas')
+        parser.add_argument(
+            '--revoke',
+            action=argparse.BooleanOptionalAction,
+            help='revoke old PAT tokens generated by this script',
+            default=True)
+        parser.add_argument(
+            '-e', '--expiration-days',
+            metavar='N',
+            type=int,
+            default=7,
+            help='PAT expiration timestamp expressed in the number of days '
+            'from now')
+        parser.add_argument(
+            '--prefix',
+            help='PAT name prefix',
+            default=self.pat_prefix)
+
+
+class MavenCommand(RotationCommandBase):
+    command_name = 'maven'
+    command_help = 'rotate PAT tokens in Maven settings.xml'
+    pat_prefix = '[Maven]'
+
+    maven_namespace = 'http://maven.apache.org/SETTINGS/1.0.0'
+    namespaces = {'': maven_namespace}
+
+    def get_organizations(self, args):
+        xml = self.get_xml(args.settings_path)
+        accessible_orgs = get_organizations()
+        orgs = set()
+        for org in xml.findall('./servers/server/username', self.namespaces):
+            if org.text in accessible_orgs:
+                orgs.add(org.text)
+        return list(orgs)
+
+    def update_tokens(self, tokens, args):
+        xml = self.get_xml(args.settings_path)
+        for org in tokens:
+            token = tokens[org]
+            password_xpath = (f'./servers/server[username="{org}"]/password')
+            for password in xml.findall(password_xpath, self.namespaces):
+                password.text = token
+        xml.write(args.settings_path, xml_declaration=True, encoding='utf-8',
+                  default_namespace=self.maven_namespace)
+        print(f'Updated {args.settings_path}')
+
+    def get_xml(self, settings_path):
+        return xml.etree.ElementTree.parse(settings_path)
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--settings-path',
+            metavar='PATH',
+            default=os.path.expanduser('~/.m2/settings.xml'),
+            help='path to settings.xml')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Azure DevOps PAT helper. Azure CLI is required to run '
+        'this script. Before using this script, you must log in to Azure '
+        'using `az login`.')
+    commands = [
+        ListCommand(),
+        RevokeCommand(),
+        CreateCommand(),
+        GitCommand(),
+        MavenCommand(),
+    ]
+    subparsers = parser.add_subparsers(title='subcommands', required=True)
+    for command in commands:
+        command.register(subparsers, parser)
+    args = parser.parse_args()
+    retcode = None
+    try:
+        retcode = args.func(args)
+    except KeyboardInterrupt:
+        return 2
+    except:
+        traceback.print_exc()
+        return 1
+    return 0 if retcode is None else retcode
+
+
+if __name__ == '__main__':
+    exit(main())
