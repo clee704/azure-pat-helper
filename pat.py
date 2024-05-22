@@ -106,8 +106,10 @@ def format_pat_name(format_string=None, **kwargs):
                                 **kwargs)
 
 
-def get_access_token():
+def get_access_token(resource=None):
     cmd_args = ['az', 'account', 'get-access-token']
+    if resource is not None:
+        cmd_args.extend(['--resource', resource])
     return run_json_command(cmd_args)
 
 
@@ -281,7 +283,8 @@ class GitCommand(CommandRegistry):
 
     def get_token(self, args, org):
         if args.use_bearer_token:
-            bear = get_access_token()
+            bear = get_access_token(
+                resource='499b84ac-1321-427f-aa17-267ca6975798')
             return bear['accessToken']
         else:
             name = format_pat_name(prefix=args.prefix, org=org)
