@@ -340,11 +340,13 @@ class RotationCommandBase:
 
     def revoke_pats(self, orgs, prefix):
         for pat in list_pats(orgs[0]):
-            regex = re.compile(rf'^{re.escape(prefix)} org=(?P<org>[\w-]+)')
+            regex = re.compile(rf'^{re.escape(prefix)} org=(?P<org>[\w-]+)'
+                               r' host=(?P<host>[^=]+) user=')
             match = re.match(regex, pat['displayName'])
             if match:
                 org = match.group('org')
-                if org in orgs:
+                host = match.group('host')
+                if org in orgs and host == platform.node():
                     revoke_pat(org, pat)
                     print(f'Revoked PAT {pat["displayName"]!r}')
 
