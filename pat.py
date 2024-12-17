@@ -45,7 +45,10 @@ def run_json_command(cmd_args):
             f'Command {cmd!r} returned a non-zero code {p.returncode}\n' +
             f'stdout: {p.stdout.decode(sys.stdout.encoding)}\n' +
             f'stderr: {p.stderr.decode(sys.stdout.encoding)}')
-    return {} if p.stdout == b'' else json.loads(p.stdout)
+    try:
+        return {} if p.stdout == b'' else json.loads(p.stdout)
+    except json.decoder.JSONDecodeError as e:
+        raise RuntimeError(f'{p.stdout} is not a valid JSON') from e
 
 
 def az_rest(uri, method, query_params=None, body=None, content_type=None,
