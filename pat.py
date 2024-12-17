@@ -70,6 +70,9 @@ def az_rest(uri, method, query_params=None, body=None, content_type=None,
         cmd_args.extend(['--headers', f'Content-Type={content_type}'])
     if response_filter is not None:
         cmd_args.extend(['--query', response_filter])
+    if os.environ.get('AZURE_ACCESS_TOKEN'):
+        token = os.environ.get('AZURE_ACCESS_TOKEN')
+        cmd_args.extend(['--headers', f'Authorization=Bearer {token}'])
     return run_json_command(cmd_args)
 
 
