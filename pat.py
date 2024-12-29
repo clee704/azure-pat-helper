@@ -360,7 +360,7 @@ class RotationCommandBase:
         tokens = {}
         for org in orgs:
             name = format_pat_name(prefix=prefix, org=org)
-            pat = create_pat(org, name, 'vso.packaging_write', expiration)
+            pat = create_pat(org, name, args.scope, expiration)
             tokens[org] = pat['token']
             print(f'Created PAT {pat["displayName"]!r} valid to '
                   f'{pat["validTo"]}')
@@ -393,7 +393,13 @@ class RotationCommandBase:
             '--prefix',
             help='PAT name prefix',
             default=self.pat_prefix)
-
+        parser.add_argument(
+            '--scope',
+            metavar='SCOPE',
+            help='PAT scope (see https://learn.microsoft.com/en-us/azure/'
+            'devops/integrate/get-started/authentication/oauth?view=azure-'
+            'devops#scopes for more information)',
+            default='vso.packaging_write')
 
 class MavenCommand(RotationCommandBase, CommandRegistry):
     command_name = 'maven'
