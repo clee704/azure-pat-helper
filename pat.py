@@ -440,6 +440,41 @@ class MavenCommand(RotationCommandBase, CommandRegistry):
             help='path to settings.xml')
 
 
+class IvyCommand(RotationCommandBase, CommandRegistry):
+    command_name = 'ivy'
+    command_help = 'rotate PAT tokens in Ivy ivysettings.xml'
+    pat_prefix = '[Ivy]'
+
+    def get_organizations(self, args):
+        xml = self.get_xml(args.settings_path)
+        accessible_orgs = get_organizations()
+        orgs = set()
+        for cred in xml.findall('./credentials'):
+            org = cred.attrib.get("username")
+            if org in accessible_orgs:
+                orgs.add(org)
+        return list(orgs)
+
+    def update_tokens(self, tokens, args):
+        xml = self.get_xml(args.settings_path)
+        for org in tokens:
+            token = tokens[org]
+            for cred in xml.findall(f'./credentials[@username="{org}"]'):
+                cred.attrib["passwd"]= token
+        xml.write(args.settings_path, xml_declaration=True, encoding='utf-8')
+        print(f'Updated {args.settings_path}')
+
+    def get_xml(self, settings_path):
+        return xml.etree.ElementTree.parse(settings_path)
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--settings-path',
+            metavar='PATH',
+            default=os.path.expanduser('~/.ivy2/ivysettings.xml'),
+            help='path to ivysettings.xml')
+
+
 class NpmCommand(RotationCommandBase, CommandRegistry):
     command_name = 'npm'
     command_help = 'rotate PAT tokens in the user npmrc'
