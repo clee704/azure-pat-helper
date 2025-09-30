@@ -28,6 +28,7 @@ import json
 import os.path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import traceback
@@ -51,6 +52,13 @@ def run_json_command(cmd_args):
         raise RuntimeError(f'{p.stdout} is not a valid JSON') from e
 
 
+def az_cmd():
+    az_cmd_path = shutil.which('az')
+    if az_cmd_path is None:
+        raise RuntimeError('az command not found')
+    return az_cmd_path
+
+
 def az_rest(uri, method, query_params=None, body=None, content_type=None,
             response_filter=None):
     params = {'api-version': api_version}
@@ -59,7 +67,7 @@ def az_rest(uri, method, query_params=None, body=None, content_type=None,
     query_string = urllib.parse.urlencode(params)
     uri = f'{uri}?{query_string}'
     cmd_args = [
-        'az', 'rest',
+        az_cmd(), 'rest',
         '--method', method,
         '--uri', uri,
         '--resource', 'https://management.core.windows.net/',
@@ -113,7 +121,7 @@ def format_pat_name(format_string=None, **kwargs):
 
 
 def get_access_token(resource=None):
-    cmd_args = ['az', 'account', 'get-access-token']
+    cmd_args = [az_cmd(), 'account', 'get-access-token']
     if resource is not None:
         cmd_args.extend(['--resource', resource])
     return run_json_command(cmd_args)
