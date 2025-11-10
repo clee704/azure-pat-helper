@@ -342,17 +342,23 @@ class GitCommand(CommandRegistry):
 
 class RotationCommandBase:
     def run(self, args):
+        if args.generate and not args.organizations:
+            print("Organizations are required when --generate is used")
+            return 1
         orgs = (args.organizations.split(',') if args.organizations else
                 self.get_organizations(args))
         if not orgs:
             print('No organizations are specified/found')
             return 1
         if args.revoke:
-            self.revoke_pats(orgs, args.prefix)
+            self._revoke_pats(orgs, args.prefix)
         expiration = datetime.now() + timedelta(days=args.expiration_days)
-        self.rotate_pats(orgs, args.prefix, expiration, args)
+        if args.generate:
+            self._generate_pats(orgs, args.prefix, expiration, args)
+        else:
+            self._rotate_pats(orgs, args.prefix, expiration, args)
 
-    def revoke_pats(self, orgs, prefix):
+    def _revoke_pats(self, orgs, prefix):
         for pat in list_pats(orgs[0]):
             regex = re.compile(rf'^{re.escape(prefix)} org=(?P<org>[\w-]+)'
                                r' host=(?P<host>[^=]+) user=')
@@ -364,7 +370,7 @@ class RotationCommandBase:
                     revoke_pat(org, pat)
                     print(f'Revoked PAT {pat["displayName"]!r}')
 
-    def rotate_pats(self, orgs, prefix, expiration, args):
+    def _generate_tokens(self, orgs, prefix, expiration, args):
         tokens = {}
         for org in orgs:
             name = format_pat_name(prefix=prefix, org=org)
@@ -372,7 +378,18 @@ class RotationCommandBase:
             tokens[org] = pat['token']
             print(f'Created PAT {pat["displayName"]!r} valid to '
                   f'{pat["validTo"]}')
+        return tokens
+
+    def _rotate_pats(self, orgs, prefix, expiration, args):
+        tokens = self._generate_tokens(orgs, prefix, expiration, args)
         self.update_tokens(tokens, args)
+
+    def _generate_pats(self, orgs, prefix, expiration, args):
+        feeds = args.generate.split(',')
+        if len(orgs) == 1:
+            orgs = [orgs[0] for feed in feeds]
+        tokens = self._generate_tokens(set(orgs), prefix, expiration, args)
+        self.generate_file(tokens, orgs, feeds, args)
 
     def register(self, subparsers, parser):
         parser = subparsers.add_parser(
@@ -408,6 +425,8 @@ class RotationCommandBase:
             'devops/integrate/get-started/authentication/oauth?view=azure-'
             'devops#scopes for more information)',
             default='vso.packaging_write')
+        parser.add_argument('--generate', metavar='FEED', help='comma separated list of feeds to include in the settings file; --org is required for each feed; if all feeds share the same org, a single org can be specified')
+
 
 class MavenCommand(RotationCommandBase, CommandRegistry):
     command_name = 'maven'
@@ -416,6 +435,19 @@ class MavenCommand(RotationCommandBase, CommandRegistry):
 
     maven_namespace = 'http://maven.apache.org/SETTINGS/1.0.0'
     namespaces = {'': maven_namespace}
+
+    template_settings = '''<?xml version='1.0' encoding='utf-8'?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    {servers}
+  </servers>
+</settings>'''
+
+    template_server = '''<server>
+  <id>{name}</id>
+  <username>{org}</username>
+  <password>{pat}</password>
+</server>'''
 
     def get_organizations(self, args):
         xml = self.get_xml(args.settings_path)
@@ -436,6 +468,13 @@ class MavenCommand(RotationCommandBase, CommandRegistry):
         xml.write(args.settings_path, xml_declaration=True, encoding='utf-8',
                   default_namespace=self.maven_namespace)
         print(f'Updated {args.settings_path}')
+
+    def generate_file(self, tokens, orgs, feeds, args):
+        servers = '\n'.join(self.template_server.format(name=feed, org=org, pat=tokens[org]) for org, feed in zip(orgs, feeds))
+        settings = self.template_settings.format(servers=servers)
+        with open(args.settings_path, 'w') as f:
+            f.write(settings)
+        print(f"Generated {args.settings_path}")
 
     def get_xml(self, settings_path):
         return xml.etree.ElementTree.parse(settings_path)
