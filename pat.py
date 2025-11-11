@@ -25,7 +25,7 @@ import argparse
 import base64
 import getpass
 import json
-import os.path
+import os
 import platform
 import re
 import shutil
@@ -472,6 +472,7 @@ class MavenCommand(RotationCommandBase, CommandRegistry):
     def generate_file(self, tokens, orgs, feeds, args):
         servers = '\n'.join(self.template_server.format(name=feed, org=org, pat=tokens[org]) for org, feed in zip(orgs, feeds))
         settings = self.template_settings.format(servers=servers)
+        os.makedirs(os.path.dirname(args.settings_path), exist_ok=True)
         with open(args.settings_path, 'w') as f:
             f.write(settings)
         print(f"Generated {args.settings_path}")
