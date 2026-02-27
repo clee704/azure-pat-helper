@@ -333,9 +333,9 @@ class GitCommand(CommandRegistry):
             default='[Git]')
         parser.add_argument(
             '--use-bearer-token',
-            action='store_true',
-            help='use bearer token instead of creating a PAT; a generated '
-            'bearer token is not reused')
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help='use bearer token instead of creating a PAT')
         parser.add_argument(
             'action', choices=['get', 'store', 'erase'])
 
