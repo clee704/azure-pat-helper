@@ -286,11 +286,16 @@ class GitCommand(CommandRegistry):
         if match:
             return match.group('org')
         if host == 'dev.azure.com':
+            path = self.get_value(input_lines, 'path', required=False)
+            if path:
+                return path.split('/')[0]
             return self.get_value(input_lines, 'username')
 
-    def get_value(self, input_lines, key):
+    def get_value(self, input_lines, key, required=True):
         lines = [line for line in input_lines if line.startswith(f'{key}=')]
         if len(lines) != 1:
+            if not required:
+                return None
             raise RuntimeError(f'Expected exactly one {key}, but got '
                                f'{len(lines)}')
         return lines[0].removeprefix(f'{key}=').removesuffix('\n')
