@@ -292,7 +292,7 @@ class GitCommand(CommandRegistry):
         lines = [line for line in input_lines if line.startswith(f'{key}=')]
         if len(lines) != 1:
             raise RuntimeError(f'Expected exactly one {key}, but got '
-                               f'{len(host_lines)}')
+                               f'{len(lines)}')
         return lines[0].removeprefix(f'{key}=').removesuffix('\n')
 
     def get_token(self, args, org):
